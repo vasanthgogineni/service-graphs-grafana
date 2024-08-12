@@ -1,5 +1,5 @@
 # Enabling Service Graphs and L3 metrics in Grafana using Grafana Beyla, OpenTelemetry Collector, and Grafana Tempo
-Service graphs for a kubernetes cluster can
+Service graphs for a kubernetes cluster can Service graphs help you to understand the structure of the system. Provide a high-level overview of the health of your system. Service graphs display error rates, latencies, as well as other relevant data. Provide an historic view of a system's topology.
 
 <img width="1792" alt="Screenshot 2024-08-08 at 2 49 27 PM" src="https://github.com/user-attachments/assets/79940bcb-276e-41ca-b396-1f92b69250fd">
 
@@ -18,36 +18,326 @@ kubectl create namespace beyla
 #### 1. Deploy Beyla
 Create beyla service account, cluster role and cluster role binding
 ```
-# path/to/beylaserviceacc.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+ name: beyla
+ namespace: beyla
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+ name: beyla
+rules:
+ - apiGroups: [ "apps" ]
+   resources: [ "replicasets" ]
+   verbs: [ "list", "watch" ]
+ - apiGroups: [ "" ]
+   resources: [ "pods", "services", "nodes" ]
+   verbs: [ "list", "watch" ]
+ - apiGroups: [""]
+   resources: ["pods", "nodes"]
+   verbs: ["get", "list", "watch"]
+ - apiGroups: ["apps"]
+   resources: ["deployments"]
+   verbs: ["get", "list", "watch"]
+ - apiGroups: ["monitoring.coreos.com"]
+   resources: ["servicemonitors"]
+   verbs: ["get", "list", "watch", "create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+ name: beyla
+subjects:
+ - kind: ServiceAccount
+   name: beyla
+   namespace: beyla
+roleRef:
+ kind: ClusterRole
+ name: beyla
+ apiGroup: rbac.authorization.k8s.io
 ```
 
 Now, we will deploy beyla as a daemonset. For this, we will also create a beyla configmap.
 In the configmap, **layer 3 metrics** can be optionally enabled by adding the section in the YAML file indicated as the section required for the beyla_network_flow_bytes metric.
+
 beyla-config and beyla daemonset: (Beyla 1.6.4)
 ```
-# path/to/beylaconfiganddaemonset.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+ namespace: beyla
+ name: beyla-config
+data:
+ beyla-config.yml: |
+   # this is for beyla_network_flow_bytes metric
+   network:
+     enable: true
+     print_flows: true
+   attributes:
+     kubernetes:
+       enable: true
+     select:
+       beyla_network_flow_bytes:
+         include:
+           - beyla.ip
+           - src.name
+           - dst.port
+           - k8s.src.owner.name
+           - k8s.src.namespace
+           - k8s.dst.owner.name
+           - k8s.dst.namespace
+           - k8s.cluster.name
+   # end of section for beyla_network_flow_bytes
+   # this will provide automatic routes report while minimizing cardinality
+   routes:
+     unmatched: heuristic
+   #service discovery
+   discovery:
+     services:
+       - k8s_deployment_name: "^docs$"
+       - open_ports: 8080-8089
+       - k8s_deployment_name: "^website$"
+       - k8s_namespace: default
+       - k8s_namespace: beyla
+       - k8s_deployment_name: "^client-service$"
+       - k8s_deployment_name: "^hello-service$"
+   otel_traces_export:
+     reporters_cache_len: 1024
+     sampler:
+       name: "always_on"
+     endpoint: http://opentelemetrycollector.beyla:4317
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+ namespace: beyla
+ name: beyla
+spec:
+ selector:
+   matchLabels:
+     instrumentation: beyla
+ template:
+   metadata:
+     labels:
+       instrumentation: beyla
+   spec:
+     serviceAccountName: beyla
+     hostPID: true # mandatory!
+     hostNetwork: true
+     containers:
+       - name: beyla
+         image: grafana/beyla:1.6.4
+         ports:
+         - containerPort: 9092
+           hostPort: 9092
+           name: http-metrics
+           protocol: TCP
+         imagePullPolicy: IfNotPresent
+         securityContext:
+           capabilities:
+             add:
+               - BPF
+               - PERFMON
+               - NET_ADMIN
+               - SYS_RESOURCE
+           privileged: true # mandatory!
+           readOnlyRootFilesystem: true
+         volumeMounts:
+           - mountPath: /config
+             name: beyla-config
+           - mountPath: /var/run/beyla
+             name: var-run-beyla
+         env:
+           - name: BEYLA_CONFIG_PATH
+             value: "/config/beyla-config.yml"
+           - name: BEYLA_PROMETHEUS_PORT
+             value: "9092"
+           - name: BEYLA_PRINT_TRACES
+             value: 'true'
+           - name: OTEL_EXPORTER_OTLP_ENDPOINT
+             value: http://opentelemetrycollector.beyla.svc.cluster.local:4317
+     volumes:
+       - name: beyla-config
+         configMap:
+           name: beyla-config
+       - name: var-run-beyla
+         emptyDir: {}
 ```
 
 #### 2. Deploy OpenTelemetry Collector
 The OpenTelemetry Collector will need to ingest the metrics and traces from Beyla. We will first create the service/endpoint that Beyla will send the metrics and traces to.
 OpenTelemetry Collector service:
 ```
-# path to OTELCOL svc
+apiVersion: v1
+kind: Service
+metadata:
+ name: opentelemetrycollector
+ namespace: beyla
+spec:
+ ports:
+ - name: grpc-otlp
+   port: 4317
+   protocol: TCP
+   targetPort: 4317
+ selector:
+   app.kubernetes.io/name: opentelemetrycollector
+ type: ClusterIP
 ```
 Next, we will create the configmap used to deploy the collector.
 Configmap:
 ```
-#path to configmap
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+ name: collector-config
+ namespace: beyla
+data:
+ collector.yaml: |
+   receivers:
+     otlp:
+       protocols:
+         grpc:
+           endpoint: ${env:MY_POD_IP}:4317
+         http:
+           endpoint: ${env:MY_POD_IP}:4318
+   processors:
+     batch:
+     memory_limiter:
+       # 80% of maximum memory up to 2G
+       limit_mib: 1500
+       # 25% of limit up to 2G
+       spike_limit_mib: 512
+       check_interval: 5s
+   extensions:
+     zpages: {}
+   exporters:
+     # logging:
+     otlp:
+       endpoint: "tempo-distributor.tempo-test:4317"
+       insecure: true
+   service:
+     extensions: [zpages]
+     pipelines:
+       traces/1:
+         receivers: [otlp]
+         processors: [memory_limiter, batch]
+         exporters: [otlp]
+       # metrics:
+       #   receivers: [otlp]
+       #   processors: [batch]
+       #   exporters: [logging]
 ```
 We also need to create a deployment for the OTEL collector.
 Deployment:
 ```
-# path to deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+ name: opentelemetrycollector
+ namespace: beyla
+spec:
+ replicas: 1
+ selector:
+   matchLabels:
+     app.kubernetes.io/name: opentelemetrycollector
+ template:
+   metadata:
+     labels:
+       app.kubernetes.io/name: opentelemetrycollector
+   spec:
+     containers:
+     - name: otelcol
+       args:
+       - --config=/conf/collector.yaml
+       image: otel/opentelemetry-collector:0.18.0
+       volumeMounts:
+       - mountPath: /conf
+         name: collector-config
+     volumes:
+     - configMap:
+         items:
+         - key: collector.yaml
+           path: collector.yaml
+         name: collector-config
+       name: collector-config
 ```
 #### 3. Deploy Client-service and Hello-service to generate sample traces and metrics
 We will create a service called hello-service that simply returns "Hello from Hello Service" when visited. We will also create a client-service that continuously queries hello-service every 5 seconds in order to generate sample traces and metrics.
 ```
-path to client and hello service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+ name: hello-service
+ namespace: beyla
+spec:
+ replicas: 1
+ selector:
+   matchLabels:
+     app: hello-service
+ template:
+   metadata:
+     labels:
+       app: hello-service
+   spec:
+     containers:
+     - name: hello-service
+       image: hashicorp/http-echo:0.2.3
+       args:
+       - "-text=Hello from Hello Service"
+       ports:
+       - containerPort: 5678
+—--
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+ name: client-service
+ namespace: beyla
+spec:
+ replicas: 1
+ selector:
+   matchLabels:
+     app: client-service
+ template:
+   metadata:
+     labels:
+       app: client-service
+   spec:
+     containers:
+     - name: client-service
+       image: curlimages/curl:7.83.1
+       args:
+       - "/bin/sh"
+       - "-c"
+       - "while true; do curl -s hello-service.beyla; sleep 5; done"
+—--
+apiVersion: v1
+kind: Service
+metadata:
+ name: hello-service
+ namespace: beyla
+spec:
+ selector:
+   app: hello-service
+ ports:
+   - protocol: TCP
+     port: 80
+     targetPort: 5678
+—--
+apiVersion: v1
+kind: Service
+metadata:
+ name: client-service
+ namespace: beyla
+spec:
+ selector:
+   app: client-service
+ ports:
+   - protocol: TCP
+     port: 80
+     targetPort: 80
 ```
 #### 4. Deploy Prometheus
 Create the prometheus namespace
@@ -56,20 +346,111 @@ kubectl create namespace prometheus
 ```
 Create the configmap for prometheus. This configmap has been modified to enable the ```--web.enable-remote-write-receiver``` flag when deplopying prometheus, which allows prometheus to receive any metrics from the metrics generator using the prometheus remote write feature.
 ```
-path to prometheus configmap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+ name: prometheus-server-conf
+ namespace: prometheus
+data:
+ prometheus.yml: |
+   global:
+     scrape_interval: 15s
+     evaluation_interval: 15s
+   scrape_configs:
+     - job_name: 'beyla'
+       static_configs:
+         - targets: ['beyla.beyla:9092']
 ```
 We will also create a LoadBalancer service for prometheus, so that we can access it directly for testing. You may create a ClusterIP service instead.
 ```
-path to prom service
+apiVersion: v1
+kind: Service
+metadata:
+ name: prometheus-service
+ namespace: prometheus
+spec:
+ selector:
+   app: prometheus-server
+ ports:
+   - protocol: TCP
+     port: 80
+     targetPort: 9090
+ type: LoadBalancer
 ```
 Deploy prometheus as a deployment in the prometheus namespace.
 ```
-path to prom deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+ name: prometheus-server
+ namespace: prometheus
+spec:
+ replicas: 1
+ selector:
+   matchLabels:
+     app: prometheus-server
+ template:
+   metadata:
+     labels:
+       app: prometheus-server
+   spec:
+     containers:
+       - name: prometheus
+         image: prom/prometheus
+         args:
+           - "--config.file=/etc/prometheus/prometheus.yml"
+           - "--web.enable-remote-write-receiver"
+         ports:
+           - containerPort: 9090
+         volumeMounts:
+           - name: config-volume
+             mountPath: /etc/prometheus
+     volumes:
+       - name: config-volume
+         configMap:
+           name: prometheus-server-conf
+           defaultMode: 420
 ```
 #### 5. Deploy Grafana
 Deploy grafana and a LoadBalancer service for grafana.
 ```
-#path to grafana and service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+ name: grafana
+ namespace: grafana
+spec:
+ replicas: 1
+ selector:
+   matchLabels:
+     app: grafana
+ template:
+   metadata:
+     labels:
+       app: grafana
+   spec:
+     containers:
+     - name: grafana
+       image: grafana/grafana
+       ports:
+       - containerPort: 3000
+       env:
+       - name: GF_SECURITY_ADMIN_PASSWORD
+         value: "admin"
+---
+apiVersion: v1
+kind: Service
+metadata:
+ name: grafana
+ namespace: grafana
+spec:
+ type: LoadBalancer
+ ports:
+   - port: 80
+     targetPort: 3000
+     protocol: TCP
+ selector:
+   app: grafana
 ```
 #### 6. Deploy Grafana Tempo
 We will use Helm to deploy the Tempo distributed architecture.

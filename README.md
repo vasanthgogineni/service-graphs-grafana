@@ -1,7 +1,7 @@
 # Enabling Service Graphs and L3 metrics in Grafana using Grafana Beyla, OpenTelemetry Collector, and Grafana Tempo
 Service graphs for a Kubernetes cluster offer valuable insights into the system's architecture. They give a high-level summary of the system's health, showcasing error rates, latencies, and other pertinent metrics. Additionally, they provide a historical perspective on the system's topology. They are a useful tool for monitoring and diagnosing issues within your Kubernetes cluster. By visualizing the interactions between services, you can quickly identify bottlenecks, pinpoint failing components, and understand the impact of different services on overall performance. This holistic view enables more effective troubleshooting and optimization, ultimately contributing to a more resilient and efficient system.
 
-Service graphs can be visualized in grafana using either Grafana Beyla or Cilium and Hubble. After considering both options, I decided to use Grafana Beyla. For a more detailed comparison and description of the process to set up Cilium and Hubble UI service graphs (and the possibility of visualizing the service graph in Grafana), refer to this [document]().
+Service graphs can be visualized in grafana using either Grafana Beyla or Cilium and Hubble. After considering both options, I decided to use Grafana Beyla. For a more detailed comparison and description of the process to set up Cilium and Hubble UI service graphs (and the possibility of visualizing the service graph in Grafana), refer to this [document](Cilium, Hubble, Grafana L7 flow and service graph.pdf).
 
 <img width="1792" alt="Screenshot 2024-08-08 at 2 49 27 PM" src="https://github.com/user-attachments/assets/79940bcb-276e-41ca-b396-1f92b69250fd">
 

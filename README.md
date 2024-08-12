@@ -527,9 +527,11 @@ Tempo data source additional settings:
 **Viewing Service Graphs**
 
 Go to the Explore tab in Grafana. Click on the service graph tab in the query to see a service graph. To view service graphs in a dashboard, create a node graph visualization in a dashboard and set Tempo as the data source. I created an example dashboard that you can find here that looks like this:
+
 <img width="751" alt="Screenshot 2024-08-12 at 4 32 49 PM" src="https://github.com/user-attachments/assets/231f634c-c2bd-4d52-877a-43495046451b">
 
 Go to the logs of a beyla pod in the beyla namespace in the kubernetes cluster. Search for ```traceparent```. Copy any one of the trace IDs and paste it in the traceQL tab. Click on Run Query to see something like this:
+
 <img width="721" alt="Screenshot 2024-08-12 at 4 20 25 PM" src="https://github.com/user-attachments/assets/80359dff-e5ca-4b00-aa0a-3c754bc08ca1">
 
 **Notes and Issues:**

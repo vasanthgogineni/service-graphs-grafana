@@ -1,0 +1,100 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+ namespace: beyla
+ name: beyla-config
+data:
+ beyla-config.yml: |
+   # this is for beyla_network_flow_bytes metric
+   network:
+     enable: true
+     print_flows: true
+   attributes:
+     kubernetes:
+       enable: true
+     select:
+       beyla_network_flow_bytes:
+         include:
+           - beyla.ip
+           - src.name
+           - dst.port
+           - k8s.src.owner.name
+           - k8s.src.namespace
+           - k8s.dst.owner.name
+           - k8s.dst.namespace
+           - k8s.cluster.name
+   # end of section for beyla_network_flow_bytes
+   # this will provide automatic routes report while minimizing cardinality
+   routes:
+     unmatched: heuristic
+   #service discovery
+   discovery:
+     services:
+       - k8s_deployment_name: "^docs$"
+       - open_ports: 8080-8089
+       - k8s_deployment_name: "^website$"
+       - k8s_namespace: default
+       - k8s_namespace: beyla
+       - k8s_deployment_name: "^client-service$"
+       - k8s_deployment_name: "^hello-service$"
+   otel_traces_export:
+     reporters_cache_len: 1024
+     sampler:
+       name: "always_on"
+     endpoint: http://opentelemetrycollector.beyla:4317
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+ namespace: beyla
+ name: beyla
+spec:
+ selector:
+   matchLabels:
+     instrumentation: beyla
+ template:
+   metadata:
+     labels:
+       instrumentation: beyla
+   spec:
+     serviceAccountName: beyla
+     hostPID: true # mandatory!
+     hostNetwork: true
+     containers:
+       - name: beyla
+         image: grafana/beyla:1.6.4
+         ports:
+         - containerPort: 9092
+           hostPort: 9092
+           name: http-metrics
+           protocol: TCP
+         imagePullPolicy: IfNotPresent
+         securityContext:
+           capabilities:
+             add:
+               - BPF
+               - PERFMON
+               - NET_ADMIN
+               - SYS_RESOURCE
+           privileged: true # mandatory!
+           readOnlyRootFilesystem: true
+         volumeMounts:
+           - mountPath: /config
+             name: beyla-config
+           - mountPath: /var/run/beyla
+             name: var-run-beyla
+         env:
+           - name: BEYLA_CONFIG_PATH
+             value: "/config/beyla-config.yml"
+           - name: BEYLA_PROMETHEUS_PORT
+             value: "9092"
+           - name: BEYLA_PRINT_TRACES
+             value: 'true'
+           - name: OTEL_EXPORTER_OTLP_ENDPOINT
+             value: http://opentelemetrycollector.beyla.svc.cluster.local:4317
+     volumes:
+       - name: beyla-config
+         configMap:
+           name: beyla-config
+       - name: var-run-beyla
+         emptyDir: {}

@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+ name: hello-service
+ namespace: beyla
+spec:
+ replicas: 1
+ selector:
+   matchLabels:
+     app: hello-service
+ template:
+   metadata:
+     labels:
+       app: hello-service
+   spec:
+     containers:
+     - name: hello-service
+       image: hashicorp/http-echo:0.2.3
+       args:
+       - "-text=Hello from Hello Service"
+       ports:
+       - containerPort: 5678
+—--
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+ name: client-service
+ namespace: beyla
+spec:
+ replicas: 1
+ selector:
+   matchLabels:
+     app: client-service
+ template:
+   metadata:
+     labels:
+       app: client-service
+   spec:
+     containers:
+     - name: client-service
+       image: curlimages/curl:7.83.1
+       args:
+       - "/bin/sh"
+       - "-c"
+       - "while true; do curl -s hello-service.beyla; sleep 5; done"
+—--
+apiVersion: v1
+kind: Service
+metadata:
+ name: hello-service
+ namespace: beyla
+spec:
+ selector:
+   app: hello-service
+ ports:
+   - protocol: TCP
+     port: 80
+     targetPort: 5678
+—--
+apiVersion: v1
+kind: Service
+metadata:
+ name: client-service
+ namespace: beyla
+spec:
+ selector:
+   app: client-service
+ ports:
+   - protocol: TCP
+     port: 80
+     targetPort: 80

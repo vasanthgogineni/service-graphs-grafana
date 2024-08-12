@@ -9,10 +9,12 @@ We will need to use Grafana Beyla, OpenTelemetry Collector, Grafana Tempo, and P
 The service graph feature in grafana requires a prometheus metrics data source. However, the service graph metrics need to be derived from traces produced by Grafana Beyla, which can monitor L7 and L3 data flow. As such, we will install Beyla in the cluster and use it to automatically instrument various namespaces in the cluster. We will send metrics and traces produced by Beyla to an OpenTelemetry Collector, which will then forward the traces to a Grafana Tempo endpoint. Grafana Tempo has a pod in its distributed architecture which is known as the metrics generator. It converts the traces it receives to prometheus metrics, which we can then send to a prometheus server in the cluster. Next, in Grafana, we need to configure the Tempo service as a data source and the prometheus service as the data source that converts the traces to metrics. By simply navigating to the Explore tab in Grafana, and switching to the Tempo data source's service graph tab, we will be able to see a service graph like the one above.
 
 The four namespaces we create will look like this after following the steps below:
+
 <img width="1320" alt="Screenshot 2024-08-08 at 2 30 50 PM (1)" src="https://github.com/user-attachments/assets/af0b99dc-eaf6-4128-95ed-beaa57efb7a4">
 <img width="1314" alt="Screenshot 2024-08-08 at 2 31 16 PM" src="https://github.com/user-attachments/assets/a4d11101-3df1-4520-8a14-c876526da166">
 <img width="1312" alt="Screenshot 2024-08-08 at 2 31 06 PM" src="https://github.com/user-attachments/assets/2f1101f7-60e3-4a37-96cd-ed2c64cd0a3c">
 <img width="1145" alt="Screenshot 2024-08-08 at 2 30 32 PM (1)" src="https://github.com/user-attachments/assets/50fd30a2-62ad-44bc-ba5a-03c20ce287f2">
+
 
 ## Steps
 Create a GKE cluster.
